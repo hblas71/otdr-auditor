@@ -1,6 +1,9 @@
 """
-Auditoría y Caracterización de Fibras Ópticas OTDR
-Aplicación integral Streamlit (Front-end + Motor de Análisis).
+Auditoría y Caracterización Completa de Fibras Ópticas OTDR
+Soporta:
+1. Análisis del Recorrido Completo (Vano a 40 km): Longitud, Pérdida total, Atenuación dB/km, ORL, Eventos.
+2. Análisis de Salida de Central (Trazas 10 km con bobina de 30 m): Pérdida 27m-150m (límite 2.0 dB).
+3. Simetría y balance del par (LI vs LO).
 """
 import streamlit as st
 import pandas as pd
@@ -396,7 +399,7 @@ def parse_otdr_pdf(pdf_path):
 
 
 # ==========================================
-# 3. MOTOR DE ANÁLISIS Y REGLAS G.652.D
+# 3. MOTOR DE ANÁLISIS COMPLETO (VANO COMPLETO + SALIDA CENTRAL)
 # ==========================================
 """
 OTDR Fiber Characterization & Fiber Pair Analysis Engine.
@@ -493,6 +496,121 @@ def analyze_central_exit_2pt(filepath):
         "detail": detail
     }
 
+def parse_trace_file(filepath):
+    """Extrae métricas completas de un fichero .sor o .pdf."""
+    ext = os.path.splitext(filepath)[1].lower()
+    meta = parse_filename_metadata(filepath)
+    direction = meta["direction"]
+    filename = meta["filename"]
+
+    if ext == ".sor":
+        try:
+            parser = SorParser(filepath)
+            data = parser.parse()
+            summary = data.get("summary", {})
+            params = data.get("params", {})
+            events = data.get("events", [])
+
+            length_km = summary.get("span_length_km", 0.0)
+            total_loss_db = summary.get("total_span_loss_db", 0.0)
+            avg_att = summary.get("avg_attenuation_db_km", 0.0)
+            wl = params.get("wavelength_nm", 1550)
+            orl = summary.get("orl_db", None)
+
+            return {
+                "filename": filename,
+                "filepath": filepath,
+                "direction": direction,
+                "is_10km": meta["is_10km"],
+                "format": "SOR",
+                "wavelength_nm": wl,
+                "pulse_width_ns": params.get("pulse_width_ns"),
+                "ior": params.get("group_index_ior", 1.465),
+                "length_km": length_km,
+                "total_loss_db": total_loss_db,
+                "avg_attenuation_db_km": avg_att,
+                "orl_db": orl,
+                "events": events
+            }
+        except Exception as e:
+            st.warning(f"Error procesando binario SOR {filename}: {e}")
+
+    elif ext == ".pdf":
+        if pdfplumber is None:
+            st.error("Librería pdfplumber no disponible para parsear PDFs.")
+            return None
+        try:
+            data = parse_otdr_pdf(filepath)
+            summary = data.get("summary", {})
+            params = data.get("params", {})
+            events = data.get("events", [])
+
+            length_km = summary.get("span_length_km", 0.0)
+            total_loss_db = summary.get("total_loss_db", 0.0)
+            avg_att = summary.get("avg_attenuation_db_km", 0.0)
+            wl = params.get("wavelength_nm", 1550)
+            orl = summary.get("orl_db", None)
+
+            return {
+                "filename": filename,
+                "filepath": filepath,
+                "direction": direction,
+                "is_10km": meta["is_10km"],
+                "format": "PDF",
+                "wavelength_nm": wl,
+                "pulse_width_ns": params.get("pulse_width_ns"),
+                "ior": params.get("ior", 1.465),
+                "length_km": length_km,
+                "total_loss_db": total_loss_db,
+                "avg_attenuation_db_km": avg_att,
+                "orl_db": orl,
+                "events": events
+            }
+        except Exception as e:
+            st.warning(f"Error procesando PDF {filename}: {e}")
+
+    return None
+
+def auditoria_eventos_vano(events, wl=1550):
+    """Audita todos los eventos de la traza frente a ITU-T G.652.D."""
+    eventos_auditados = []
+    criticos_fuera_norma = 0
+
+    for ev in events:
+        dist_km = ev.get("distance_km", 0.0)
+        tipo = ev.get("event_type", "Evento")
+        perdida = ev.get("loss_db", 0.0)
+        refl = ev.get("reflectance_db")
+
+        # Criterios normativos
+        if "Reflective" in tipo or "Connector" in tipo:
+            limite = THRESHOLDS["connector_loss_max_db"] # 0.50 dB
+            estado = "APTO" if perdida <= limite else "NO APTO"
+            diag = "Conector conforme" if estado == "APTO" else f"Conector degradado (>{limite} dB)"
+        elif "End" in tipo or "Fin" in tipo:
+            limite = "-"
+            estado = "INFO"
+            diag = "Fin de fibra detectado"
+        else:
+            limite = THRESHOLDS["splice_loss_max_db"] # 0.20 dB
+            estado = "APTO" if perdida <= limite else "NO APTO"
+            diag = "Empalme conforme" if estado == "APTO" else f"Empalme con exceso de pérdida (>{limite} dB)"
+
+        if estado == "NO APTO":
+            criticos_fuera_norma += 1
+
+        eventos_auditados.append({
+            "PK (km)": dist_km,
+            "Tipo": tipo,
+            "Pérdida (dB)": perdida,
+            "Límite (dB)": limite,
+            "Reflectancia (dB)": refl if refl is not None else "-",
+            "Estado": estado,
+            "Diagnóstico": diag
+        })
+
+    return eventos_auditados, criticos_fuera_norma
+
 # ==========================================
 # 4. INTERFAZ VISUAL STREAMLIT
 # ==========================================
@@ -502,8 +620,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🔬 Auditoría y Caracterización de Fibras Ópticas OTDR")
-st.markdown("Herramienta automática para auditar trazas OTDR de vanos conforme a la norma **ITU-T G.652.D** y criterios de **Salida de Central** (bobina de 30 m).")
+st.title("🔬 Auditoría y Caracterización Integral de Fibras Ópticas OTDR")
+st.markdown("Genera el informe técnico completo en 2 partes: **Recorrido Completo del Vano** (longitud, pérdida total, atenuación ITU-T G.652.D y auditoría de eventos) y **Salida de Central** (bobina de 30 m, medida 27 m a 150 m).")
 st.markdown("---")
 
 st.subheader("1. Subida de Medidas")
@@ -517,8 +635,8 @@ if uploaded_file is not None:
     nombre_archivo = uploaded_file.name
     st.info(f"📁 Archivo cargado: **{nombre_archivo}**")
     
-    if st.button("🚀 Ejecutar Análisis Técnico", type="primary"):
-        with st.spinner("Procesando trazas OTDR y evaluando umbrales normativos..."):
+    if st.button("🚀 Ejecutar Análisis Técnico Completo", type="primary"):
+        with st.spinner("Procesando trazas completas de vano y salida de central..."):
             with tempfile.TemporaryDirectory() as tmpdir:
                 file_bytes = uploaded_file.read()
                 archivos_a_procesar = []
@@ -547,82 +665,156 @@ if uploaded_file is not None:
 
                 nombre_vano = os.path.splitext(nombre_archivo)[0].replace("VANO_", "").replace(".zip", "")
                 
-                central_results = []
+                # Parsear todas las trazas
+                trazas_parseadas = []
                 for f in archivos_a_procesar:
-                    meta = parse_filename_metadata(f)
-                    if meta["is_10km"] or len(archivos_a_procesar) <= 2:
-                        res = analyze_central_exit_2pt(f)
-                        central_results.append(res)
+                    tr = parse_trace_file(f)
+                    if tr:
+                        trazas_parseadas.append(tr)
 
+                if not trazas_parseadas:
+                    st.error("No se pudieron extraer datos de las trazas subidas.")
+                    st.stop()
+
+                # Separar trazas por tipo: Vano Completo vs Salida Central (10km)
+                trazas_vano_completo = [t for t in trazas_parseadas if not t["is_10km"]]
+                trazas_central = [t for t in trazas_parseadas if t["is_10km"]]
+
+                # Si solo hay 2 trazas de 10km (caso vano corto < 10km), las mismas se usan para ambos bloques
+                if not trazas_vano_completo and len(trazas_central) > 0:
+                    trazas_vano_completo = trazas_central
+
+                # 1. Análisis de Salida de Central (27m a 150m)
+                central_results = []
+                for t in (trazas_central if trazas_central else trazas_vano_completo):
+                    res = analyze_central_exit_2pt(t["filepath"])
+                    central_results.append(res)
+
+                # 2. Análisis de Recorrido Completo
+                total_criticos_eventos = 0
+                resumen_vano = []
+                for t in trazas_vano_completo:
+                    eventos_audit, criticos = auditoria_eventos_vano(t["events"], t["wavelength_nm"])
+                    total_criticos_eventos += criticos
+                    t["eventos_audit"] = eventos_audit
+                    t["criticos"] = criticos
+
+                    # Validar atenuación dB/km frente a G.652D
+                    wl = t["wavelength_nm"]
+                    limite_att = THRESHOLDS["attenuation_max_db_km"].get(wl, 0.25)
+                    att_ok = t["avg_attenuation_db_km"] <= limite_att
+
+                    resumen_vano.append({
+                        "Hilo": t["direction"],
+                        "Fichero": t["filename"],
+                        "Longitud (km)": f"{t['length_km']:.3f} km",
+                        "Pérdida Vano (dB)": f"{t['total_loss_db']:.2f} dB",
+                        "Atenuación": f"{t['avg_attenuation_db_km']:.3f} dB/km (Máx {limite_att})",
+                        "ORL (dB)": f"{t['orl_db']} dB" if t["orl_db"] else "-",
+                        "Eventos Fuera Norma": criticos,
+                        "Estado": "APTO" if (att_ok and criticos == 0) else "NO APTO"
+                    })
+
+                # 3. Dictamen Global
                 dictamen_global = "APTO"
+                motivos_no_apto = []
+
                 for cr in central_results:
                     if cr["status"] == "NO APTO":
                         dictamen_global = "NO APTO"
+                        motivos_no_apto.append(f"Exceso de pérdida en central (Hilo {cr['direction']}: {cr['loss_2pt_db']} dB > 2.0 dB)")
 
+                if total_criticos_eventos > 0:
+                    dictamen_global = "NO APTO"
+                    motivos_no_apto.append(f"{total_criticos_eventos} evento(s) superan los umbrales de empalme (0.20 dB) o conector (0.50 dB)")
+
+                # MOSTRAR RESULTADOS
                 st.markdown("---")
                 st.subheader(f"2. Resultado de la Auditoría - Vano: {nombre_vano}")
 
                 if dictamen_global == "APTO":
                     st.success("## ✅ DICTAMEN GLOBAL DEL VANO: APTO")
-                    st.markdown("Todas las fibras evaluadas cumplen con los criterios de atenuación en salida de central (≤ 2.00 dB).")
+                    st.markdown("El enlace cumple íntegramente con la norma **ITU-T G.652.D** en todo su recorrido y con los criterios de **Salida de Central** (≤ 2.00 dB).")
                 else:
                     st.error("## ❌ DICTAMEN GLOBAL DEL VANO: NO APTO")
-                    st.markdown("Se han detectado pérdidas excesivas en la salida de central (> 2.00 dB) que requieren intervención en ODF/repartidor.")
+                    for m in motivos_no_apto:
+                        st.markdown(f"- ⚠️ **{m}**")
 
-                cols = st.columns(len(central_results) if central_results else 1)
-                for i, cr in enumerate(central_results):
-                    with cols[i]:
-                        st.metric(
-                            label=f"Pérdida Central - Hilo {cr['direction']}",
-                            value=f"{cr['loss_2pt_db']} dB",
-                            delta="Cumple (≤ 2.0 dB)" if cr["status"] == "APTO" else "Supera límite (> 2.0 dB)",
-                            delta_color="normal" if cr["status"] == "APTO" else "inverse"
-                        )
+                # Pestañas para organizar la visualización completa
+                tab1, tab2, tab3 = st.tabs(["📊 Recorrido Completo del Vano", "🏢 Salida de Central (Bobina 30m)", "🔍 Auditoría de Eventos por Hilo"])
 
-                st.markdown("### Resumen Detallado de Salida de Central (Bobina de 30 m)")
-                tabla_datos = []
-                for cr in central_results:
-                    tabla_datos.append({
-                        "Hilo": cr["direction"],
-                        "Fichero": cr["filename"],
-                        "Pto A (27m)": f"{cr['cursor_a_level_db']} dB",
-                        "Pto B (150m)": f"{cr['cursor_b_level_db']} dB",
-                        "Pérdida Central": f"{cr['loss_2pt_db']} dB",
-                        "Umbral Máx": f"{cr['max_allowed_db']} dB",
-                        "Estado": cr["status"],
-                        "Diagnóstico": cr["detail"]
-                    })
+                with tab1:
+                    st.markdown("### Bloque 1: Caracterización de Extremo a Extremo")
+                    df_vano = pd.DataFrame(resumen_vano)
+                    st.dataframe(df_vano, use_container_width=True)
 
-                df = pd.DataFrame(tabla_datos)
-                st.dataframe(df, use_container_width=True)
+                with tab2:
+                    st.markdown("### Bloque 2: Auditoría en Salida de Central (27 m a 150 m con Bobina de 30 m)")
+                    cols = st.columns(len(central_results) if central_results else 1)
+                    for i, cr in enumerate(central_results):
+                        with cols[i]:
+                            st.metric(
+                                label=f"Pérdida Central - Hilo {cr['direction']}",
+                                value=f"{cr['loss_2pt_db']} dB",
+                                delta="Cumple (≤ 2.0 dB)" if cr["status"] == "APTO" else "Supera límite (> 2.0 dB)",
+                                delta_color="normal" if cr["status"] == "APTO" else "inverse"
+                            )
 
+                    tabla_central = []
+                    for cr in central_results:
+                        tabla_central.append({
+                            "Hilo": cr["direction"],
+                            "Fichero": cr["filename"],
+                            "Pto A (27m)": f"{cr['cursor_a_level_db']} dB",
+                            "Pto B (150m)": f"{cr['cursor_b_level_db']} dB",
+                            "Pérdida Salida Central": f"{cr['loss_2pt_db']} dB",
+                            "Límite Máx": f"{cr['max_allowed_db']} dB",
+                            "Estado": cr["status"],
+                            "Diagnóstico": cr["detail"]
+                        })
+                    st.dataframe(pd.DataFrame(tabla_central), use_container_width=True)
+
+                with tab3:
+                    st.markdown("### Bloque 3: Auditoría Detallada de Eventos a lo largo de la Fibra")
+                    for t in trazas_vano_completo:
+                        st.markdown(f"#### 📍 Eventos en Hilo **{t['direction']}** ({t['filename']})")
+                        if t.get("eventos_audit"):
+                            st.dataframe(pd.DataFrame(t["eventos_audit"]), use_container_width=True)
+                        else:
+                            st.info("No se registraron eventos discretos en esta traza.")
+
+                # Generación del Informe Markdown
                 report_md = f"""# INFORME TÉCNICO DE CARACTERIZACIÓN DE FIBRAS ÓPTICAS
 **Vano:** {nombre_vano}  
 **Dictamen Global:** **{dictamen_global}**  
-**Norma de referencia:** ITU-T G.652.D / Criterio Salida de Central
+**Norma de referencia:** ITU-T G.652.D
 
 ---
 
-## 1. Resumen Ejecutivo
-- **Dictamen:** {dictamen_global}
-- **Fibras auditadas:** {len(central_results)}
-- **Criterio Salida Central (27m a 150m con bobina 30m):** Máximo 2.00 dB.
+## 1. Resumen Ejecutivo de Resultados
+| Hilo | Longitud | Pérdida Vano | Atenuación | Salida Central (27m-150m) | Eventos Fuera Norma | Dictamen |
+|---|---|---|---|---|---|---|
+"""
+                for t in trazas_vano_completo:
+                    cr = next((c for c in central_results if c["direction"] == t["direction"]), None)
+                    p_cent = f"{cr['loss_2pt_db']} dB" if cr else "-"
+                    report_md += f"| {t['direction']} | {t['length_km']:.3f} km | {t['total_loss_db']:.2f} dB | {t['avg_attenuation_db_km']:.3f} dB/km | {p_cent} | {t['criticos']} | {dictamen_global} |\n"
 
-## 2. Detalle de Salida de Central
-| Hilo | Fichero | Pérdida (27m-150m) | Límite | Estado | Diagnóstico |
-|---|---|---|---|---|---|
+                report_md += f"""
+---
+## 2. Detalle de Salida de Central (Bobina de 30m)
 """
                 for cr in central_results:
-                    report_md += f"| {cr['direction']} | {cr['filename']} | {cr['loss_2pt_db']} dB | {cr['max_allowed_db']} dB | {cr['status']} | {cr['detail']} |\n"
+                    report_md += f"- **Hilo {cr['direction']} ({cr['filename']}):** Pérdida {cr['loss_2pt_db']} dB (Límite {cr['max_allowed_db']} dB) -> **{cr['status']}** ({cr['detail']})\n"
 
-                report_md += """
+                report_md += f"""
 ---
 ## 3. Plan de Actuación Recomendado
 """
                 if dictamen_global == "NO APTO":
-                    report_md += "- **Intervención Prioritaria:** Limpieza, conectorización o sustitución de pigtail/pasamuros en el repartidor ODF del hilo NO APTO.\n"
+                    report_md += "- **Intervención Prioritaria:** Limpieza, conectorización o sustitución en los puntos kilométricos señalados fuera de norma.\n"
                 else:
-                    report_md += "- **Sin acciones requeridas:** El vano cumple con los estándares para su puesta en servicio.\n"
+                    report_md += "- **Sin acciones requeridas:** El vano cumple íntegramente con los estándares.\n"
 
                 st.markdown("---")
                 st.subheader("3. Descarga de Informe Oficial")
@@ -633,4 +825,4 @@ if uploaded_file is not None:
                     mime="text/markdown"
                 )
 else:
-    st.info("👆 Por favor sube un archivo `.zip` con las medidas de tu vano para comenzar.")
+    st.info("👆 Sube un archivo `.zip` con las medidas de tu vano para iniciar la auditoría.")
