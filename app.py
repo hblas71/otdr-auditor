@@ -669,45 +669,73 @@ if uploaded_file is not None:
                 st.markdown("---")
                 st.subheader(f"2. Resultado de la Auditoría - Vano: {nombre_vano}")
 
-                if dictamen_global == "APTO":
-                    st.success("## ✅ DICTAMEN GLOBAL DEL VANO: APTO")
-                    st.markdown("El enlace cumple íntegramente con la norma **ITU-T G.652.D** en todo su recorrido y con los criterios de **Salida de Central** (≤ 2.00 dB).")
+                dictamen_pasa = "PASA" if dictamen_global == "APTO" else "NO PASA"
+
+                if dictamen_pasa == "PASA":
+                    st.success("## ✅ DICTAMEN GLOBAL DEL VANO: PASA")
+                    st.markdown("Todas las fibras cumplen íntegramente con la atenuación de vano (ITU-T G.652.D) y con el criterio de primeros metros en central (≤ 2.00 dB).")
                 else:
-                    st.error("## ❌ DICTAMEN GLOBAL DEL VANO: NO APTO")
+                    st.error("## ❌ DICTAMEN GLOBAL DEL VANO: NO PASA")
                     for m in motivos_no_apto:
                         st.markdown(f"- ⚠️ **{m}**")
 
-                # Tarjetas métricas principales
-                st.markdown("### 📌 Métricas Clave de Extremo a Extremo")
+                # ==========================================
+                # VISTA INICIAL: TABLA RESUMEN EJECUTIVO (PASA / NO PASA)
+                # ==========================================
+                st.markdown("### 📋 Cuadro Resumen Ejecutivo por Fibra")
+                
+                tabla_resumen_inicial = []
+                for t in trazas_vano_completo:
+                    cr = next((c for c in central_results if c["direction"] == t["direction"]), None)
+                    p_cent = f"{cr['loss_2pt_db']:.2f} dB" if cr else "-"
+                    pasa_central = "🟢 PASA" if (cr and cr["status"] == "APTO") else "🔴 NO PASA"
+                    
+                    wl = t["wavelength_nm"]
+                    limite_att = THRESHOLDS["attenuation_max_db_km"].get(wl, 0.25)
+                    att_ok = t["avg_attenuation_db_km"] <= limite_att
+                    pasa_vano = "🟢 PASA" if (att_ok and t.get("criticos", 0) == 0) else "🔴 NO PASA"
+                    
+                    pasa_hilo = "🟢 PASA" if (pasa_central == "🟢 PASA" and pasa_vano == "🟢 PASA") else "🔴 NO PASA"
+
+                    tabla_resumen_inicial.append({
+                        "Hilo": t["direction"],
+                        "Fichero": t["filename"],
+                        "Longitud Óptica": f"{t['length_km']:.3f} km",
+                        "Pérdida Total Vano": f"{t['total_loss_db']:.2f} dB",
+                        "Eval. Vano (G.652.D)": pasa_vano,
+                        "Pérdida 1os Metros (Central)": f"{p_cent} (Máx 2.0 dB)",
+                        "Eval. 1os Metros": pasa_central,
+                        "Eventos Fuera Norma": f"{t.get('criticos', 0)}",
+                        "Dictamen Hilo": pasa_hilo
+                    })
+
+                df_inicial = pd.DataFrame(tabla_resumen_inicial)
+                st.dataframe(df_inicial, use_container_width=True, hide_index=True)
+
+                # Tarjetas métricas
                 cols = st.columns(len(trazas_vano_completo) if trazas_vano_completo else 1)
                 for i, t in enumerate(trazas_vano_completo):
+                    cr = next((c for c in central_results if c["direction"] == t["direction"]), None)
+                    p_cent_val = f"{cr['loss_2pt_db']:.2f} dB" if cr else "-"
                     with cols[i]:
                         st.metric(
-                            label=f"Pérdida Total - Hilo {t['direction']}",
+                            label=f"Hilo {t['direction']} - Pérdida Total Vano",
                             value=f"{t['total_loss_db']:.2f} dB",
-                            delta=f"Longitud: {t['length_km']:.3f} km"
+                            delta=f"1os Metros: {p_cent_val} (Límite 2.0 dB)",
+                            delta_color="normal" if (cr and cr["status"] == "APTO") else "inverse"
                         )
 
-                # Pestañas
+                st.markdown("---")
+                st.markdown("### 🔎 Detalle Técnico Avanzado")
                 tab1, tab2, tab3 = st.tabs(["📊 Recorrido Completo del Vano", "🏢 Salida de Central (Bobina 30m)", "🔍 Auditoría de Eventos por Hilo"])
 
                 with tab1:
-                    st.markdown("### Bloque 1: Caracterización de Extremo a Extremo")
+                    st.markdown("#### Caracterización de Extremo a Extremo")
                     df_vano = pd.DataFrame(resumen_vano)
-                    st.dataframe(df_vano, use_container_width=True)
+                    st.dataframe(df_vano, use_container_width=True, hide_index=True)
 
                 with tab2:
-                    st.markdown("### Bloque 2: Auditoría en Salida de Central (27 m a 150 m con Bobina de 30 m)")
-                    cols_c = st.columns(len(central_results) if central_results else 1)
-                    for i, cr in enumerate(central_results):
-                        with cols_c[i]:
-                            st.metric(
-                                label=f"Pérdida Central - Hilo {cr['direction']}",
-                                value=f"{cr['loss_2pt_db']} dB",
-                                delta="Cumple (≤ 2.0 dB)" if cr["status"] == "APTO" else "Supera límite (> 2.0 dB)",
-                                delta_color="normal" if cr["status"] == "APTO" else "inverse"
-                            )
-
+                    st.markdown("#### Auditoría en Primeros Metros (27 m a 150 m con Bobina de 30 m)")
                     tabla_central = []
                     for cr in central_results:
                         tabla_central.append({
@@ -715,19 +743,19 @@ if uploaded_file is not None:
                             "Fichero": cr["filename"],
                             "Pto A (27m)": f"{cr['cursor_a_level_db']} dB",
                             "Pto B (150m)": f"{cr['cursor_b_level_db']} dB",
-                            "Pérdida Salida Central": f"{cr['loss_2pt_db']} dB",
-                            "Límite Máx": f"{cr['max_allowed_db']} dB",
-                            "Estado": cr["status"],
-                            "Diagnóstico": cr["detail"]
+                            "Pérdida Primeros Metros": f"{cr['loss_2pt_db']} dB",
+                            "Límite Máximo": f"{cr['max_allowed_db']} dB",
+                            "Evaluación": "🟢 PASA" if cr["status"] == "APTO" else "🔴 NO PASA",
+                            "Diagnóstico Técnico": cr["detail"]
                         })
-                    st.dataframe(pd.DataFrame(tabla_central), use_container_width=True)
+                    st.dataframe(pd.DataFrame(tabla_central), use_container_width=True, hide_index=True)
 
                 with tab3:
-                    st.markdown("### Bloque 3: Auditoría Detallada de Eventos a lo largo de la Fibra")
+                    st.markdown("#### Auditoría Detallada de Eventos a lo largo de la Fibra")
                     for t in trazas_vano_completo:
-                        st.markdown(f"#### 📍 Eventos en Hilo **{t['direction']}** ({t['filename']})")
+                        st.markdown(f"📍 **Eventos en Hilo {t['direction']}** ({t['filename']})")
                         if t.get("eventos_audit"):
-                            st.dataframe(pd.DataFrame(t["eventos_audit"]), use_container_width=True)
+                            st.dataframe(pd.DataFrame(t["eventos_audit"]), use_container_width=True, hide_index=True)
                         else:
                             st.info("No se registraron eventos discretos en esta traza.")
 
@@ -735,42 +763,3 @@ if uploaded_file is not None:
                 report_md = f"""# INFORME TÉCNICO DE CARACTERIZACIÓN DE FIBRAS ÓPTICAS
 **Vano:** {nombre_vano}  
 **Dictamen Global:** **{dictamen_global}**  
-**Norma de referencia:** ITU-T G.652.D
-
----
-
-## 1. Resumen Ejecutivo de Resultados
-| Hilo | Longitud | Pérdida Vano | Atenuación | Salida Central (27m-150m) | Eventos Fuera Norma | Dictamen |
-|---|---|---|---|---|---|---|
-"""
-                for t in trazas_vano_completo:
-                    cr = next((c for c in central_results if c["direction"] == t["direction"]), None)
-                    p_cent = f"{cr['loss_2pt_db']} dB" if cr else "-"
-                    report_md += f"| {t['direction']} | {t['length_km']:.3f} km | {t['total_loss_db']:.2f} dB | {t['avg_attenuation_db_km']:.3f} dB/km | {p_cent} | {t['criticos']} | {dictamen_global} |\n"
-
-                report_md += f"""
----
-## 2. Detalle de Salida de Central (Bobina de 30m)
-"""
-                for cr in central_results:
-                    report_md += f"- **Hilo {cr['direction']} ({cr['filename']}):** Pérdida {cr['loss_2pt_db']} dB (Límite {cr['max_allowed_db']} dB) -> **{cr['status']}** ({cr['detail']})\n"
-
-                report_md += f"""
----
-## 3. Plan de Actuación Recomendado
-"""
-                if dictamen_global == "NO APTO":
-                    report_md += "- **Intervención Prioritaria:** Limpieza, conectorización o sustitución en los puntos kilométricos señalados fuera de norma.\n"
-                else:
-                    report_md += "- **Sin acciones requeridas:** El vano cumple íntegramente con los estándares.\n"
-
-                st.markdown("---")
-                st.subheader("3. Descarga de Informe Oficial")
-                st.download_button(
-                    label="📥 Descargar Informe Completo (.md)",
-                    data=report_md,
-                    file_name=f"informe_caracterizacion_{nombre_vano}.md",
-                    mime="text/markdown"
-                )
-else:
-    st.info("👆 Sube un archivo `.zip` con las medidas de tu vano para iniciar la auditoría.")
