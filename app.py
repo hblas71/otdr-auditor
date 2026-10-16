@@ -200,12 +200,20 @@ class SorParser:
             return
         last_ev = self.events[-1]
         span_length_km = last_ev["distance_km"]
+        wl = self.params.get('wavelength_nm', 1550)
+        baseline_rate = 0.35 if wl < 1400 else 0.22
+
+        disc_loss = sum(ev["loss_db"] for ev in self.events if ev["loss_db"] > 0)
+        min_glass_loss = span_length_km * (0.30 if wl < 1400 else 0.18)
+        min_possible_loss = max(disc_loss, min_glass_loss)
 
         # 1. Telcordia standard: check end-to-end loss on last event (m3)
-        total_loss_db = last_ev.get("end_to_end_loss_db")
+        e2e_m3 = last_ev.get("end_to_end_loss_db")
+        total_loss_db = e2e_m3 if (e2e_m3 and e2e_m3 >= min_possible_loss) else None
 
-        # 2. Check vendor blocks (JDSU / VIAVI / EXFO / Acterna)
+        # 2. Extract vendor candidates (JDSU / VIAVI / EXFO / Acterna)
         if total_loss_db is None or total_loss_db <= 0:
+            candidate_losses = []
             data = self.data
             for vendor_tag in [b'JDSU', b'EXFO', b'VIAVI', b'Acterna']:
                 pos_v = data.find(vendor_tag, max(50, self.map_size - 10))
@@ -213,23 +221,26 @@ class SorParser:
                     for i in range(pos_v, len(data) - 8, 2):
                         try:
                             val = struct.unpack('>d', data[i:i+8])[0]
-                            val_abs = abs(val)
-                            if 1.0 <= val_abs <= 35.0:
-                                total_loss_db = round(val_abs, 2)
+                            val_abs = round(abs(val), 2)
+                            # Ignore exact configuration threshold constants like 2.00, 0.50, 0.20
+                            if any(abs(val_abs - th) < 0.005 for th in [2.0, 0.5, 0.2, 1.0]):
+                                continue
+                            if min_possible_loss <= val_abs <= (span_length_km * 0.45 + disc_loss + 2.5):
+                                candidate_losses.append(val_abs)
                         except:
                             pass
-                    if total_loss_db and total_loss_db > 0:
-                        break
+
+            if candidate_losses:
+                expected = disc_loss + span_length_km * baseline_rate
+                # Pick the candidate closest to physical model
+                total_loss_db = min(candidate_losses, key=lambda x: abs(x - expected))
 
         # 3. Fallback: cumulative discrete event losses + baseline fiber attenuation
-        wl = self.params.get('wavelength_nm', 1550)
-        rate = 0.35 if wl < 1400 else 0.22
         if total_loss_db is None or total_loss_db <= 0:
-            disc_loss = sum(ev["loss_db"] for ev in self.events if ev["loss_db"] > 0)
-            fiber_loss = span_length_km * rate
+            fiber_loss = span_length_km * baseline_rate
             total_loss_db = round(disc_loss + fiber_loss, 2)
 
-        avg_att = round(total_loss_db / span_length_km, 3) if span_length_km > 0 else rate
+        avg_att = round(total_loss_db / span_length_km, 3) if span_length_km > 0 else baseline_rate
 
         bc = self.params.get('backscatter_coeff_db', -81.0)
         est_orl = round(abs(bc) - (total_loss_db * 1.1), 1)
