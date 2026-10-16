@@ -682,31 +682,29 @@ if uploaded_file is not None:
                 # ==========================================
                 # VISTA INICIAL: TABLA RESUMEN EJECUTIVO (PASA / NO PASA)
                 # ==========================================
-                st.markdown("### 📋 Cuadro Resumen Ejecutivo por Fibra")
+                st.markdown("### 📋 Resumen por Fibra")
                 
                 tabla_resumen_inicial = []
                 for t in trazas_vano_completo:
                     cr = next((c for c in central_results if c["direction"] == t["direction"]), None)
                     p_cent = f"{cr['loss_2pt_db']:.2f} dB" if cr else "-"
-                    pasa_central = "🟢 PASA" if (cr and cr["status"] == "APTO") else "🔴 NO PASA"
+                    estado_central = "🟢 PASA" if (cr and cr["status"] == "APTO") else "🔴 NO PASA"
                     
                     wl = t["wavelength_nm"]
                     limite_att = THRESHOLDS["attenuation_max_db_km"].get(wl, 0.25)
                     att_ok = t["avg_attenuation_db_km"] <= limite_att
-                    pasa_vano = "🟢 PASA" if (att_ok and t.get("criticos", 0) == 0) else "🔴 NO PASA"
+                    estado_vano = "🟢 PASA" if (att_ok and t.get("criticos", 0) == 0) else "🔴 NO PASA"
                     
-                    pasa_hilo = "🟢 PASA" if (pasa_central == "🟢 PASA" and pasa_vano == "🟢 PASA") else "🔴 NO PASA"
+                    dictamen_final = "🟢 PASA" if (estado_central == "🟢 PASA" and estado_vano == "🟢 PASA") else "🔴 NO PASA"
 
                     tabla_resumen_inicial.append({
-                        "Hilo": t["direction"],
-                        "Fichero": t["filename"],
-                        "Longitud Óptica": f"{t['length_km']:.3f} km",
-                        "Pérdida Total Vano": f"{t['total_loss_db']:.2f} dB",
-                        "Eval. Vano (G.652.D)": pasa_vano,
-                        "Pérdida 1os Metros (Central)": f"{p_cent} (Máx 2.0 dB)",
-                        "Eval. 1os Metros": pasa_central,
-                        "Eventos Fuera Norma": f"{t.get('criticos', 0)}",
-                        "Dictamen Hilo": pasa_hilo
+                        "Fibra": f"Hilo {t['direction']}",
+                        "Longitud Total": f"{t['length_km']:.3f} km",
+                        "Pérdida Total": f"{t['total_loss_db']:.2f} dB",
+                        "Estado Fibra Total": estado_vano,
+                        "Pérdida en Central (27m-150m)": f"{p_cent} (Máx 2.0 dB)",
+                        "Estado Fibra en Central": estado_central,
+                        "Dictamen Final": dictamen_final
                     })
 
                 df_inicial = pd.DataFrame(tabla_resumen_inicial)
