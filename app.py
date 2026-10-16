@@ -759,7 +759,7 @@ if uploaded_file is not None:
                         else:
                             st.info("No se registraron eventos discretos en esta traza.")
 
-                # Generación del Informe Markdown
-                report_md = f"""# INFORME TÉCNICO DE CARACTERIZACIÓN DE FIBRAS ÓPTICAS
-**Vano:** {nombre_vano}  
-**Dictamen Global:** **{dictamen_global}**  
+                # Generación del Informe Markdown (100% seguro sin triples comillas)
+                lines_rep = [
+                    "# INFORME TÉCNICO DE CARACTERIZACIÓN DE FIBRAS ÓPTICAS",
+                    f"**Vano:** {nombre_vano}",
