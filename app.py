@@ -763,3 +763,53 @@ if uploaded_file is not None:
                 lines_rep = [
                     "# INFORME TÉCNICO DE CARACTERIZACIÓN DE FIBRAS ÓPTICAS",
                     f"**Vano:** {nombre_vano}",
+                    f"**Dictamen Global:** **{dictamen_pasa}** ({dictamen_global})",
+                    "**Norma de referencia:** ITU-T G.652.D",
+                    "",
+                    "---",
+                    "",
+                    "## 1. Resumen Ejecutivo de Resultados",
+                    "| Hilo | Longitud | Pérdida Vano | Atenuación | Salida Central | Eventos Fuera Norma | Dictamen |",
+                    "|---|---|---|---|---|---|---|"
+                ]
+                for t in trazas_vano_completo:
+                    cr = next((c for c in central_results if c["direction"] == t["direction"]), None)
+                    p_cent = f"{cr['loss_2pt_db']:.2f} dB" if cr else "-"
+                    pasa_h = "PASA" if (cr and cr["status"] == "APTO" and t.get("criticos", 0) == 0) else "NO PASA"
+                    lines_rep.append(f"| {t['direction']} | {t['length_km']:.3f} km | {t['total_loss_db']:.2f} dB | {t['avg_attenuation_db_km']:.3f} dB/km | {p_cent} | {t.get('criticos', 0)} | {pasa_h} |")
+
+                lines_rep.extend([
+                    "",
+                    "---",
+                    "## 2. Detalle de Salida de Central (Bobina de 30m)"
+                ])
+                for cr in central_results:
+                    lines_rep.append(f"- **Hilo {cr['direction']} ({cr['filename']}):** Pérdida {cr['loss_2pt_db']} dB (Límite {cr['max_allowed_db']} dB) -> **{cr['status']}** ({cr['detail']})")
+
+                lines_rep.extend([
+                    "",
+                    "---",
+                    "## 3. Plan de Actuación Recomendado"
+                ])
+                if dictamen_pasa == "NO PASA":
+                    lines_rep.append("- **Intervención Prioritaria:** Limpieza, conectorización o sustitución en los puntos kilométricos señalados fuera de norma.")
+                else:
+                    lines_rep.append("- **Sin acciones requeridas:** El vano cumple íntegramente con los estándares normativos.")
+
+                lines_rep.extend([
+                    "",
+                    "---",
+                    "*Informe generado automáticamente por el sistema de auditoría OTDR.*"
+                ])
+                report_md = "\n".join(lines_rep)
+
+                st.markdown("---")
+                st.subheader("3. Descarga de Informe Oficial")
+                st.download_button(
+                    label="📥 Descargar Informe Completo (.md)",
+                    data=report_md,
+                    file_name=f"informe_caracterizacion_{nombre_vano}.md",
+                    mime="text/markdown"
+                )
+else:
+    st.info("👆 Sube un archivo `.zip` con las medidas de tu vano para iniciar la auditoría.")
